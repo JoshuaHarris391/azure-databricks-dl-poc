@@ -1,4 +1,17 @@
 terraform/terraform.tfvars
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars.json
+*.tfplan
+.terraform.lock.hcl
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+crash.log
+crash.*.log
 
 
 # Byte-compiled / optimized / DLL files
