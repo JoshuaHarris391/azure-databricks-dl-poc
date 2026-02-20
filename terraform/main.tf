@@ -16,7 +16,8 @@ terraform {
 # Azure provider - uses Azure CLI authentication
 provider "azurerm" {
   features {}
-  subscription_id = var.subscription_id
+  subscription_id               = var.subscription_id
+  resource_provider_registrations = "none"
 }
 
 # Databricks provider - uses Azure AD authentication
