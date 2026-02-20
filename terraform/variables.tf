@@ -1,7 +1,7 @@
 variable "project_id" {
   description = "Short project identifier, used in resource names"
   type        = string
-  default     = "azure_databricks_dl_poc"
+  default     = "azuredbpoc"
 }
 
 variable "environment" {
