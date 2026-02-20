@@ -17,3 +17,10 @@ resource "azurerm_storage_container" "bronze" {
   storage_account_name  = azurerm_storage_account.datalake.name
   container_access_type = "private"
 }
+
+# --- Terraform State Container ---
+resource "azurerm_storage_container" "tfstate" {
+  name                  = "tfstate"
+  storage_account_name  = azurerm_storage_account.datalake.name
+  container_access_type = "private"
+}
