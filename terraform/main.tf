@@ -3,7 +3,7 @@ terraform {
 
   backend "azurerm" {
     resource_group_name  = "rg-azuredbpoc-dev"
-    storage_account_name = "stazuredbpocdev"
+    storage_account_name = "storageazuredbpocdev"
     container_name       = "tfstate"
     key                  = "terraform.tfstate"
   }

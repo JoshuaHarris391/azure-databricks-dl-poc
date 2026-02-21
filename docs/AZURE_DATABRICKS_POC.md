@@ -484,7 +484,7 @@ Create the ADLS Gen2 Storage Account and Bronze container.
 # AWS analogy: This is your S3. One storage account can hold multiple containers (like multiple S3 buckets).
 # `is_hns_enabled = true` turns on the hierarchical namespace, making this ADLS Gen2 (not plain Blob Storage).
 resource "azurerm_storage_account" "datalake" {
-  name                     = "st${var.project_id}${var.environment}"  # Must be globally unique, lowercase, no hyphens
+  name                     = "storage${var.project_id}${var.environment}"  # Must be globally unique, lowercase, no hyphens
   resource_group_name      = azurerm_resource_group.this.name
   location                 = azurerm_resource_group.this.location
   account_tier             = "Standard"
