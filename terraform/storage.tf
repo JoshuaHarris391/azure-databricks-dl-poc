@@ -17,3 +17,17 @@ resource "azurerm_storage_container" "bronze" {
   storage_account_name  = azurerm_storage_account.datalake.name
   container_access_type = "private"
 }
+
+# --- Silver Container ---
+resource "azurerm_storage_container" "silver" {
+  name                  = "silver"
+  storage_account_name  = azurerm_storage_account.datalake.name
+  container_access_type = "private"
+}
+
+# --- Gold Container ---
+resource "azurerm_storage_container" "gold" {
+  name                  = "gold"
+  storage_account_name  = azurerm_storage_account.datalake.name
+  container_access_type = "private"
+}
