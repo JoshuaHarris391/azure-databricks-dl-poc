@@ -2,8 +2,8 @@ terraform {
   required_version = ">= 1.5.0"
 
   backend "azurerm" {
-    resource_group_name  = "rg-azuredbpoc-dev"
-    storage_account_name = "storageazuredbpocdev"
+    resource_group_name  = "rg-azuredbpoc-tfstate-dev"
+    storage_account_name = "storageazuredbpoctfstate"
     container_name       = "tfstate"
     key                  = "terraform.tfstate"
   }
