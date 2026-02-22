@@ -1,22 +1,25 @@
 """
-Ingest FHIR R4 resources from the public HAPI FHIR server and upload to ADLS Gen2.
+Ingest FHIR R4 resources from the public HAPI FHIR server into Delta tables.
 
-This script:
+This script (Databricks-only):
 1. Queries the HAPI FHIR R4 API for Patient, Condition, and Encounter resources.
-2. Writes each resource as a newline-delimited JSON (NDJSON) file.
-3. Uploads the files to the "bronze" container in ADLS Gen2.
+2. Validates and parses each resource using fhir.resources (pydantic).
+3. Flattens the parsed resources into tabular rows.
+4. Appends the rows to Delta tables in healthcare_poc.bronze via Spark.
 
-Authentication: Uses DefaultAzureCredential, which picks up your `az login` session.
-AWS analogy: This is like a Glue Python Shell job that calls an external API and writes to S3.
+Each batch is tagged with a unique batch_id (UUID) and ingested_at timestamp.
 """
 
-import json
 import logging
-import os
 import sys
+import uuid
 from datetime import datetime, timezone
 
 import requests
+from fhir.resources.R4B.condition import Condition
+from fhir.resources.R4B.encounter import Encounter
+from fhir.resources.R4B.patient import Patient
+from pyspark.sql import SparkSession
 
 
 # --- Logging Configuration ---
@@ -31,51 +34,36 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 FHIR_BASE_URL = "https://hapi.fhir.org/baseR4"
 RESOURCE_TYPES = ["Patient", "Condition", "Encounter"]
-PAGE_SIZE = 100  # Number of resources to fetch per type
-CONTAINER_NAME = "bronze"
+PAGE_SIZE = 100
+CATALOG = "healthcare_poc"
+SCHEMA = "bronze"
 
 
-def _running_on_databricks() -> bool:
-    """Detect whether we are running inside a Databricks environment."""
-    return "DATABRICKS_RUNTIME_VERSION" in os.environ
+# --- FHIR model class lookup ---
+FHIR_MODELS = {
+    "Patient": Patient,
+    "Condition": Condition,
+    "Encounter": Encounter,
+}
 
 
-def _get_dbutils():
-    """Get the dbutils object when running on Databricks."""
-    from pyspark.sql import SparkSession
-    from pyspark.dbutils import DBUtils
-
-    spark = SparkSession.builder.getOrCreate()
-    return DBUtils(spark)
-
-
-def _get_storage_account_name() -> str:
-    """
-    Resolve the storage account name.
-
-    On Databricks: read from a job widget parameter.
-    Locally: read from the STORAGE_ACCOUNT_NAME environment variable.
-    """
-    if _running_on_databricks():
-        dbutils = _get_dbutils()
-        dbutils.widgets.text("storage_account_name", "")
-        return dbutils.widgets.get("storage_account_name")
-    return os.environ["STORAGE_ACCOUNT_NAME"]
-
-
-def fetch_fhir_resources(resource_type: str, count: int = PAGE_SIZE) -> list[dict]:
+def fetch_fhir_resources(
+    resource_type: str, count: int = PAGE_SIZE
+) -> list[dict]:
     """
     Fetch FHIR resources from the public HAPI FHIR server.
 
-    FHIR APIs return a 'Bundle' — a wrapper object containing an array of resources
-    under the 'entry' key. Each entry has a 'resource' field with the actual clinical data.
-
-    AWS analogy: This is like calling an external REST API from a Glue job.
+    FHIR APIs return a 'Bundle' — a wrapper object containing an array
+    of resources under the 'entry' key. Each entry has a 'resource'
+    field with the actual clinical data.
     """
     url = f"{FHIR_BASE_URL}/{resource_type}"
     params = {"_count": count, "_format": "json"}
 
-    logger.info(f"Fetching up to {count} {resource_type} resources from {url}")
+    logger.info(
+        "Fetching up to %d %s resources from %s",
+        count, resource_type, url,
+    )
     response = requests.get(url, params=params, timeout=30)
     response.raise_for_status()
 
@@ -83,111 +71,251 @@ def fetch_fhir_resources(resource_type: str, count: int = PAGE_SIZE) -> list[dic
     entries = bundle.get("entry", [])
     resources = [entry["resource"] for entry in entries]
 
-    logger.info(f"Successfully retrieved {len(resources)} {resource_type} resources")
+    logger.info(
+        "Successfully retrieved %d %s resources",
+        len(resources), resource_type,
+    )
     return resources
 
 
-def write_ndjson(resources: list[dict], filepath: str) -> None:
+# ------------------------------------------------------------------
+# Parsers: validate with fhir.resources then flatten to dicts
+# ------------------------------------------------------------------
+
+def _safe(fn):
+    """Return None instead of raising on missing nested attributes."""
+    try:
+        return fn()
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
+def _flatten_patient(raw: dict) -> dict:
+    """Parse and flatten a Patient resource."""
+    pat = Patient.model_validate(raw)
+    name = _safe(lambda: pat.name[0])
+    addr = _safe(lambda: pat.address[0])
+    phones = [
+        t.value for t in (pat.telecom or [])
+        if t.system == "phone"
+    ]
+    emails = [
+        t.value for t in (pat.telecom or [])
+        if t.system == "email"
+    ]
+    return {
+        "id": pat.id,
+        "active": pat.active,
+        "gender": pat.gender,
+        "birth_date": str(pat.birthDate) if pat.birthDate else None,
+        "deceased": (
+            pat.deceasedBoolean
+            if pat.deceasedBoolean is not None
+            else str(pat.deceasedDateTime) if pat.deceasedDateTime else None
+        ),
+        "family_name": _safe(lambda: name.family),
+        "given_names": (
+            ", ".join(name.given)
+            if _safe(lambda: name.given) else None
+        ),
+        "telecom_phone": phones[0] if phones else None,
+        "telecom_email": emails[0] if emails else None,
+        "address_line": (
+            ", ".join(addr.line)
+            if _safe(lambda: addr.line) else None
+        ),
+        "address_city": _safe(lambda: addr.city),
+        "address_state": _safe(lambda: addr.state),
+        "address_postal_code": _safe(lambda: addr.postalCode),
+        "address_country": _safe(lambda: addr.country),
+        "marital_status_code": _safe(
+            lambda: pat.maritalStatus.coding[0].code
+        ),
+    }
+
+
+def _flatten_condition(raw: dict) -> dict:
+    """Parse and flatten a Condition resource."""
+    cond = Condition.model_validate(raw)
+    return {
+        "id": cond.id,
+        "clinical_status": _safe(
+            lambda: cond.clinicalStatus.coding[0].code
+        ),
+        "verification_status": _safe(
+            lambda: cond.verificationStatus.coding[0].code
+        ),
+        "category_code": _safe(
+            lambda: cond.category[0].coding[0].code
+        ),
+        "code": _safe(lambda: cond.code.coding[0].code),
+        "code_display": _safe(
+            lambda: cond.code.coding[0].display
+        ),
+        "subject_reference": _safe(
+            lambda: cond.subject.reference
+        ),
+        "encounter_reference": _safe(
+            lambda: cond.encounter.reference
+        ),
+        "onset_datetime": (
+            str(cond.onsetDateTime) if cond.onsetDateTime else None
+        ),
+        "recorded_date": (
+            str(cond.recordedDate) if cond.recordedDate else None
+        ),
+    }
+
+
+def _flatten_encounter(raw: dict) -> dict:
+    """Parse and flatten an Encounter resource."""
+    enc = Encounter.model_validate(raw)
+    return {
+        "id": enc.id,
+        "status": enc.status,
+        "class_code": _safe(lambda: enc.class_fhir.code),
+        "type_code": _safe(
+            lambda: enc.type[0].coding[0].code
+        ),
+        "type_display": _safe(
+            lambda: enc.type[0].coding[0].display
+        ),
+        "subject_reference": _safe(
+            lambda: enc.subject.reference
+        ),
+        "period_start": (
+            str(enc.period.start) if _safe(lambda: enc.period.start) else None
+        ),
+        "period_end": (
+            str(enc.period.end) if _safe(lambda: enc.period.end) else None
+        ),
+        "reason_code": _safe(
+            lambda: enc.reasonCode[0].coding[0].code
+        ),
+        "reason_display": _safe(
+            lambda: enc.reasonCode[0].coding[0].display
+        ),
+        "service_provider_reference": _safe(
+            lambda: enc.serviceProvider.reference
+        ),
+    }
+
+
+FLATTEN_FN = {
+    "Patient": _flatten_patient,
+    "Condition": _flatten_condition,
+    "Encounter": _flatten_encounter,
+}
+
+
+def parse_fhir_resources(
+    resource_type: str, raw_dicts: list[dict]
+) -> list[dict]:
     """
-    Write resources as newline-delimited JSON (NDJSON).
-
-    NDJSON is one JSON object per line. This is the standard format for bulk data loading
-    into data lakes because each line can be parsed independently (unlike a JSON array
-    which must be read entirely into memory).
-
-    AWS analogy: This is the same NDJSON format that Athena and Glue expect when reading JSON from S3.
+    Validate each raw FHIR dict with fhir.resources and flatten
+    into a list of simple dicts ready for a Spark DataFrame.
     """
-    logger.debug(f"Writing {len(resources)} records to {filepath}")
-    with open(filepath, "w") as f:
-        for resource in resources:
-            f.write(json.dumps(resource) + "\n")
-    logger.info(f"Wrote {len(resources)} records to local file: {filepath}")
+    flatten = FLATTEN_FN[resource_type]
+    rows = []
+    for raw in raw_dicts:
+        try:
+            rows.append(flatten(raw))
+        except Exception:
+            logger.warning(
+                "Skipping invalid %s resource id=%s",
+                resource_type, raw.get("id"),
+                exc_info=True,
+            )
+    logger.info(
+        "Parsed %d / %d %s resources",
+        len(rows), len(raw_dicts), resource_type,
+    )
+    return rows
 
 
-def upload_to_adls(local_path: str, remote_dir: str, filename: str, storage_account_name: str) -> None:
+def write_to_delta(
+    spark: SparkSession,
+    rows: list[dict],
+    table_name: str,
+    batch_id: str,
+    ingested_at: str,
+) -> None:
     """
-    Upload a local file to ADLS Gen2.
+    Write parsed rows to a Unity Catalog Delta table in append mode.
 
-    On Databricks: uses dbutils.fs.cp to copy from the driver's local filesystem to ABFSS.
-                   Auth is handled transparently by Unity Catalog credential vending.
-    Locally:       uses DefaultAzureCredential (picks up `az login` token).
-
-    AWS analogy: This is like boto3's s3.upload_file() using credentials from ~/.aws/credentials.
+    Adds batch_id and ingested_at columns for lineage tracking.
     """
-    abfss_path = f"abfss://{CONTAINER_NAME}@{storage_account_name}.dfs.core.windows.net/{remote_dir}/{filename}"
+    for row in rows:
+        row["batch_id"] = batch_id
+        row["ingested_at"] = ingested_at
 
-    logger.info(f"Uploading {local_path} to {abfss_path}")
+    df = spark.createDataFrame(rows)
 
-    if _running_on_databricks():
-        dbutils = _get_dbutils()
-        dbutils.fs.cp(f"file:{local_path}", abfss_path)
-        logger.info(f"Successfully uploaded via dbutils to {abfss_path}")
-    else:
-        from azure.identity import DefaultAzureCredential
-        from azure.storage.filedatalake import DataLakeServiceClient
-
-        logger.debug(f"Authenticating with DefaultAzureCredential for storage account: {storage_account_name}")
-        credential = DefaultAzureCredential()
-        service_client = DataLakeServiceClient(
-            account_url=f"https://{storage_account_name}.dfs.core.windows.net",
-            credential=credential,
-        )
-        file_system_client = service_client.get_file_system_client(CONTAINER_NAME)
-        directory_client = file_system_client.get_directory_client(remote_dir)
-        file_client = directory_client.get_file_client(filename)
-
-        with open(local_path, "rb") as f:
-            file_client.upload_data(f, overwrite=True)
-
-        logger.info(f"Successfully uploaded via Azure SDK to {abfss_path}")
+    full_table = f"{CATALOG}.{SCHEMA}.{table_name}"
+    logger.info(
+        "Writing %d rows to %s", len(rows), full_table,
+    )
+    (
+        df.write
+        .format("delta")
+        .mode("append")
+        .option("mergeSchema", "true")
+        .saveAsTable(full_table)
+    )
+    logger.info("Successfully wrote to %s", full_table)
 
 
 def main():
     logger.info("Starting FHIR ingestion pipeline")
-    
-    storage_account_name = _get_storage_account_name()
-    logger.info(f"Using storage account: {storage_account_name}")
-    
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    logger.info(f"Ingestion timestamp: {timestamp}")
 
-    total_resources_ingested = 0
+    spark = SparkSession.builder.getOrCreate()
+    batch_id = str(uuid.uuid4())
+    ingested_at = datetime.now(timezone.utc).isoformat()
+    logger.info("Batch ID: %s", batch_id)
+
+    total = 0
 
     for resource_type in RESOURCE_TYPES:
-        logger.info(f"Processing resource type: {resource_type}")
-        
+        logger.info("Processing resource type: %s", resource_type)
+
         # 1. Fetch from FHIR API
         try:
-            resources = fetch_fhir_resources(resource_type)
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch {resource_type} resources: {e}")
+            raw_resources = fetch_fhir_resources(resource_type)
+        except requests.RequestException:
+            logger.error(
+                "Failed to fetch %s resources",
+                resource_type, exc_info=True,
+            )
             continue
 
-        if not resources:
-            logger.warning(f"No {resource_type} resources found, skipping")
+        if not raw_resources:
+            logger.warning(
+                "No %s resources found, skipping", resource_type,
+            )
             continue
 
-        # 2. Write to local NDJSON file
-        local_filename = f"{resource_type.lower()}_{timestamp}.ndjson"
-        local_path = f"/tmp/{local_filename}"
-        write_ndjson(resources, local_path)
+        # 2. Parse and flatten with fhir.resources
+        rows = parse_fhir_resources(resource_type, raw_resources)
+        if not rows:
+            continue
 
-        # 3. Upload to ADLS Gen2 Bronze container
-        # Directory structure: bronze/{resource_type}/filename.ndjson
-        remote_dir = resource_type.lower()
+        # 3. Write to Delta table
+        table_name = resource_type.lower()
         try:
-            upload_to_adls(local_path, remote_dir, local_filename, storage_account_name)
-            total_resources_ingested += len(resources)
-        except Exception as e:
-            logger.error(f"Failed to upload {resource_type} to ADLS: {e}")
+            write_to_delta(
+                spark, rows, table_name, batch_id, ingested_at,
+            )
+            total += len(rows)
+        except Exception:
+            logger.error(
+                "Failed to write %s to Delta",
+                resource_type, exc_info=True,
+            )
             continue
-        finally:
-            # 4. Cleanup local file
-            if os.path.exists(local_path):
-                os.remove(local_path)
-                logger.debug(f"Cleaned up local file: {local_path}")
 
-    logger.info(f"Ingestion complete. Total resources ingested: {total_resources_ingested}")
+    logger.info(
+        "Ingestion complete. Total resources ingested: %d", total,
+    )
 
 
 if __name__ == "__main__":

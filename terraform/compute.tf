@@ -43,14 +43,16 @@ resource "databricks_job" "fhir_ingestion" {
       }
     }
 
+    library {
+      pypi {
+        package = "fhir.resources>=8.0.0"
+      }
+    }
+
     spark_python_task {
       python_file = "${databricks_repo.this.path}/ingestion/ingest_fhir.py"
       source      = "WORKSPACE"
     }
   }
 
-  parameter {
-    name    = "storage_account_name"
-    default = azurerm_storage_account.datalake.name
-  }
 }

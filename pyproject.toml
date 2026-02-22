@@ -11,6 +11,7 @@ python = "^3.10"
 requests = ">=2.31.0"
 azure-storage-file-datalake = ">=12.14.0"
 azure-identity = ">=1.15.0"
+fhir-resources = {version = ">=8.0.0", extras = ["r4b"]}
 
 [build-system]
 requires = ["poetry-core"]
