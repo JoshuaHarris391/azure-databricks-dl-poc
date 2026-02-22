@@ -26,6 +26,13 @@ brew tap databricks/tap
 brew install databricks
 ```
 
+Install Python dependencies and activate the virtual environment:
+
+```bash
+poetry install
+source $(poetry env info --path)/bin/activate
+```
+
 ## Deployment
 
 1. Authenticate to Azure and select your subscription:

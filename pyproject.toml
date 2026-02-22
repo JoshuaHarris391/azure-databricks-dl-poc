@@ -11,6 +11,8 @@ python = "^3.10"
 requests = ">=2.31.0"
 azure-storage-file-datalake = ">=12.14.0"
 azure-identity = ">=1.15.0"
+dbt-core = "1.11.6"
+dbt-databricks = "1.11.5"
 
 [build-system]
 requires = ["poetry-core"]
