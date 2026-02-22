@@ -341,10 +341,30 @@ def get_job_parameters() -> dict:
         # without needing to create the widget first.
         try:
             page_size_str = dbutils.widgets.get("page_size")
-        except Exception:
+            logger.info(
+                "Got page_size from widget: '%s'",
+                page_size_str,
+            )
+        except Exception as widget_err:
+            logger.info(
+                "Widget 'page_size' not found (%s), "
+                "creating with default %d",
+                widget_err, DEFAULT_PAGE_SIZE,
+            )
             # Widget doesn't exist yet (e.g. interactive notebook run)
-            dbutils.widgets.text("page_size", str(DEFAULT_PAGE_SIZE))
+            dbutils.widgets.text(
+                "page_size", str(DEFAULT_PAGE_SIZE)
+            )
             page_size_str = dbutils.widgets.get("page_size")
+            logger.info(
+                "Got page_size after creating widget: '%s'",
+                page_size_str,
+            )
+
+        # Also check sys.argv for --page_size passed via job params
+        import sys
+        logger.info("sys.argv: %s", sys.argv)
+
         try:
             page_size = int(page_size_str)
             if page_size < 1:
@@ -360,10 +380,10 @@ def get_job_parameters() -> dict:
             )
             page_size = DEFAULT_PAGE_SIZE
             
-    except Exception:
+    except Exception as e:
         logger.info(
-            "DBUtils not available, using default page_size %d",
-            DEFAULT_PAGE_SIZE,
+            "DBUtils not available (%s), using default page_size %d",
+            e, DEFAULT_PAGE_SIZE,
         )
         page_size = DEFAULT_PAGE_SIZE
     
