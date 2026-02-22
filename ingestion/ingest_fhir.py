@@ -132,31 +132,57 @@ def fetch_fhir_resources(
     resource_type: str, count: int = DEFAULT_PAGE_SIZE
 ) -> list[dict]:
     """
-    Fetch FHIR resources from the public HAPI FHIR server.
+    Fetch FHIR resources from the public HAPI FHIR server with pagination.
 
-    FHIR APIs return a 'Bundle' — a wrapper object containing an array
-    of resources under the 'entry' key. Each entry has a 'resource'
-    field with the actual clinical data.
+    Follows FHIR Bundle 'next' links until *count* resources have been
+    collected or the server has no more pages.
     """
     url = f"{FHIR_BASE_URL}/{resource_type}"
     params = {"_count": count, "_format": "json"}
+    all_resources: list[dict] = []
+    page = 1
 
     logger.info(
         "Fetching up to %d %s resources from %s",
         count, resource_type, url,
     )
-    response = requests.get(url, params=params, timeout=30)
-    response.raise_for_status()
 
-    bundle = response.json()
-    entries = bundle.get("entry", [])
-    resources = [entry["resource"] for entry in entries]
+    while True:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
 
+        bundle = response.json()
+        entries = bundle.get("entry", [])
+        all_resources.extend(entry["resource"] for entry in entries)
+
+        logger.info(
+            "Page %d: received %d resources (%d total so far)",
+            page, len(entries), len(all_resources),
+        )
+
+        if len(all_resources) >= count:
+            break
+
+        # Find the 'next' link for the next page
+        next_url = None
+        for link in bundle.get("link", []):
+            if link.get("relation") == "next":
+                next_url = link["url"]
+                break
+
+        if not next_url:
+            break
+
+        url = next_url
+        params = None  # next URL already contains query params
+        page += 1
+
+    all_resources = all_resources[:count]
     logger.info(
-        "Successfully retrieved %d %s resources",
-        len(resources), resource_type,
+        "Successfully retrieved %d %s resources across %d page(s)",
+        len(all_resources), resource_type, page,
     )
-    return resources
+    return all_resources
 
 
 # ------------------------------------------------------------------
