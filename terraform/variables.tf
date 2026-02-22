@@ -20,3 +20,9 @@ variable "subscription_id" {
   description = "Azure subscription ID"
   type        = string
 }
+
+variable "force_destroy_catalog" {
+  description = "Allow Terraform to destroy Unity Catalog schemas and catalog even if they contain tables"
+  type        = bool
+  default     = false
+}

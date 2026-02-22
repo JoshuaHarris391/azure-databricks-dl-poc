@@ -57,10 +57,11 @@ resource "databricks_external_location" "gold" {
 
 # --- Catalog ---
 resource "databricks_catalog" "this" {
-  name         = "healthcare_poc"
-  comment      = "Healthcare POC data catalog"
-  storage_root = "abfss://bronze@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
- 
+  name          = "healthcare_poc"
+  comment       = "Healthcare POC data catalog"
+  storage_root  = "abfss://bronze@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
+  force_destroy = var.force_destroy_catalog
+
   depends_on = [
     databricks_external_location.bronze,
     databricks_external_location.silver,
@@ -70,22 +71,25 @@ resource "databricks_catalog" "this" {
 
 # --- Schemas/databases ---
 resource "databricks_schema" "bronze" {
-  catalog_name = databricks_catalog.this.name
-  name         = "bronze"
-  comment      = "Raw ingested FHIR data"
-  storage_root = "abfss://bronze@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
+  catalog_name  = databricks_catalog.this.name
+  name          = "bronze"
+  comment       = "Raw ingested FHIR data"
+  storage_root  = "abfss://bronze@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
+  force_destroy = var.force_destroy_catalog
 }
 
 resource "databricks_schema" "silver" {
-  catalog_name = databricks_catalog.this.name
-  name         = "silver"
-  comment      = "Cleaned and conformed clinical data"
-  storage_root = "abfss://silver@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
+  catalog_name  = databricks_catalog.this.name
+  name          = "silver"
+  comment       = "Cleaned and conformed clinical data"
+  storage_root  = "abfss://silver@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
+  force_destroy = var.force_destroy_catalog
 }
 
 resource "databricks_schema" "gold" {
-  catalog_name = databricks_catalog.this.name
-  name         = "gold"
-  comment      = "Aggregated and curated analytics data"
-  storage_root = "abfss://gold@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
+  catalog_name  = databricks_catalog.this.name
+  name          = "gold"
+  comment       = "Aggregated and curated analytics data"
+  storage_root  = "abfss://gold@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
+  force_destroy = var.force_destroy_catalog
 }
