@@ -24,7 +24,7 @@ resource "databricks_job" "fhir_ingestion" {
     new_cluster {
       num_workers   = 0  # Single-node (driver only) — sufficient for API fetch + upload
       spark_version = "15.4.x-scala2.12"
-      node_type_id  = "Standard_DS3_v2"
+      node_type_id  = "Standard_D4ds_v5"
 
       spark_conf = {
         "spark.databricks.cluster.profile" = "singleNode"
