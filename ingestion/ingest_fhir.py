@@ -336,11 +336,15 @@ def get_job_parameters() -> dict:
         spark = SparkSession.builder.getOrCreate()
         dbutils = DBUtils(spark)
         
-        # Create widget with default value
-        dbutils.widgets.text("page_size", str(DEFAULT_PAGE_SIZE))
-        
-        # Get and validate page_size
-        page_size_str = dbutils.widgets.get("page_size")
+        # Try to get the job parameter directly first.
+        # When run as a job, parameters are available via widgets.get()
+        # without needing to create the widget first.
+        try:
+            page_size_str = dbutils.widgets.get("page_size")
+        except Exception:
+            # Widget doesn't exist yet (e.g. interactive notebook run)
+            dbutils.widgets.text("page_size", str(DEFAULT_PAGE_SIZE))
+            page_size_str = dbutils.widgets.get("page_size")
         try:
             page_size = int(page_size_str)
             if page_size < 1:
