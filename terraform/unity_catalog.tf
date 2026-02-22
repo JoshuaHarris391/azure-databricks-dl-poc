@@ -34,6 +34,7 @@ resource "databricks_external_location" "bronze" {
   name            = "bronze-external"
   url             = "abfss://bronze@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
   credential_name = databricks_storage_credential.datalake.name
+  force_destroy   = var.force_destroy_catalog
 
   depends_on = [databricks_storage_credential.datalake]
 }
@@ -42,6 +43,7 @@ resource "databricks_external_location" "silver" {
   name            = "silver-external"
   url             = "abfss://silver@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
   credential_name = databricks_storage_credential.datalake.name
+  force_destroy   = var.force_destroy_catalog
 
   depends_on = [databricks_storage_credential.datalake]
 }
@@ -50,6 +52,7 @@ resource "databricks_external_location" "gold" {
   name            = "gold-external"
   url             = "abfss://gold@${azurerm_storage_account.datalake.name}.dfs.core.windows.net/"
   credential_name = databricks_storage_credential.datalake.name
+  force_destroy   = var.force_destroy_catalog
 
   depends_on = [databricks_storage_credential.datalake]
 }
