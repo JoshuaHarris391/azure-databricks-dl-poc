@@ -1,0 +1,13 @@
+azdbpoc_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: databricks
+      # The host is your workspace URL (without https://)
+      host: "{{ env_var('DBT_DATABRICKS_HOST') }}"
+      # The HTTP path is the SQL Warehouse endpoint
+      http_path: "{{ env_var('DBT_DATABRICKS_HTTP_PATH') }}"
+      catalog: healthcare_poc
+      schema: silver
+      # Use a personal access token for auth
+      token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
