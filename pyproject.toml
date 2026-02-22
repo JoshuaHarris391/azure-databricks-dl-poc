@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "azure-databricks-dl-poc"
+version = "0.1.0"
+description = ""
+authors = []
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+requests = ">=2.31.0"
+azure-storage-file-datalake = ">=12.14.0"
+azure-identity = ">=1.15.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
