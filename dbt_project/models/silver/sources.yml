@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: bronze
+    database: healthcare_poc
+    schema: bronze
+    tables:
+      - name: patient
+      - name: encounter
+      - name: condition

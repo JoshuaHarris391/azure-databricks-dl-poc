@@ -1,0 +1,9 @@
+
+version: 2
+
+models:
+  - name: patient
+    description: "Patient data from FHIR"
+    columns:
+      - name: id
+        description: "The primary key for this table"
