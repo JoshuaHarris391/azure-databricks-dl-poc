@@ -7,6 +7,9 @@ This script (Databricks-only):
 3. Appends the rows to Delta tables in healthcare_poc.bronze via Spark.
 
 Each batch is tagged with a unique batch_id (UUID) and ingested_at timestamp.
+
+Job Parameters:
+    page_size: Number of resources to fetch per API call (default: 100)
 """
 
 import logging
@@ -31,7 +34,7 @@ logger = logging.getLogger(__name__)
 # --- Configuration ---
 FHIR_BASE_URL = "https://hapi.fhir.org/baseR4"
 RESOURCE_TYPES = ["Patient", "Condition", "Encounter"]
-PAGE_SIZE = 100
+DEFAULT_PAGE_SIZE = 100
 CATALOG = "healthcare_poc"
 SCHEMA = "bronze"
 
@@ -125,7 +128,7 @@ SCHEMAS = {
 # ------------------------------------------------------------------
 
 def fetch_fhir_resources(
-    resource_type: str, count: int = PAGE_SIZE
+    resource_type: str, count: int = DEFAULT_PAGE_SIZE
 ) -> list[dict]:
     """
     Fetch FHIR resources from the public HAPI FHIR server.
@@ -322,8 +325,54 @@ def write_to_delta(
     logger.info("Successfully wrote to %s", full_table)
 
 
+def get_job_parameters() -> dict:
+    """
+    Get job parameters from Databricks widgets.
+    
+    Returns a dict with validated parameters.
+    """
+    try:
+        from pyspark.dbutils import DBUtils
+        spark = SparkSession.builder.getOrCreate()
+        dbutils = DBUtils(spark)
+        
+        # Create widget with default value
+        dbutils.widgets.text("page_size", str(DEFAULT_PAGE_SIZE))
+        
+        # Get and validate page_size
+        page_size_str = dbutils.widgets.get("page_size")
+        try:
+            page_size = int(page_size_str)
+            if page_size < 1:
+                logger.warning(
+                    "Invalid page_size %d, using default %d",
+                    page_size, DEFAULT_PAGE_SIZE,
+                )
+                page_size = DEFAULT_PAGE_SIZE
+        except ValueError:
+            logger.warning(
+                "Could not parse page_size '%s', using default %d",
+                page_size_str, DEFAULT_PAGE_SIZE,
+            )
+            page_size = DEFAULT_PAGE_SIZE
+            
+    except Exception:
+        logger.info(
+            "DBUtils not available, using default page_size %d",
+            DEFAULT_PAGE_SIZE,
+        )
+        page_size = DEFAULT_PAGE_SIZE
+    
+    return {"page_size": page_size}
+
+
 def main():
     logger.info("Starting FHIR ingestion pipeline")
+
+    # Get job parameters
+    params = get_job_parameters()
+    page_size = params["page_size"]
+    logger.info("Using page_size: %d", page_size)
 
     spark = SparkSession.builder.getOrCreate()
     batch_id = str(uuid.uuid4())
@@ -337,7 +386,7 @@ def main():
 
         # 1. Fetch from FHIR API
         try:
-            raw_resources = fetch_fhir_resources(resource_type)
+            raw_resources = fetch_fhir_resources(resource_type, count=page_size)
         except requests.RequestException:
             logger.error(
                 "Failed to fetch %s resources",
