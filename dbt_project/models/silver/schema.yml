@@ -7,3 +7,15 @@ models:
     columns:
       - name: id
         description: "The primary key for this table"
+
+  - name: silver_hashed_phi
+    description: "Patient data with SHA-256 hashed PHI fields (family name and given names)"
+    columns:
+      - name: id
+        description: "Patient identifier"
+      - name: family_name_hashed
+        description: "SHA-256 hash of the patient family name"
+      - name: given_names_hashed
+        description: "SHA-256 hash of the patient given names"
+      - name: birth_date
+        description: "Patient birth date"
