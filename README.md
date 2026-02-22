@@ -56,6 +56,33 @@ Terraform will output a `databricks_workspace_url` — open it and sign in with 
 
 > **Tip:** Update the resource group and storage account names in `terraform.tfvars` to something unique to avoid naming conflicts.
 
+## dbt Setup
+
+Set up environment variables for dbt to connect to Databricks:
+
+```bash
+source setup_dbt_env.sh
+```
+
+This script:
+- Fetches `DBT_DATABRICKS_HOST` and `DBT_DATABRICKS_HTTP_PATH` from Terraform outputs
+- Generates a Databricks personal access token via the CLI
+
+Verify the variables are set:
+
+```bash
+echo $DBT_DATABRICKS_HOST
+echo $DBT_DATABRICKS_HTTP_PATH
+echo $DBT_DATABRICKS_TOKEN
+```
+
+Run dbt commands from the `dbt_project/` directory:
+
+```bash
+cd dbt_project
+dbt debug  # test connection
+```
+
 ## Teardown
 
 ```bash
