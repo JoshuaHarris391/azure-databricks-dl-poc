@@ -19,3 +19,6 @@ models:
         description: "SHA-256 hash of the patient given names"
       - name: birth_date
         description: "Patient birth date"
+
+  - name: condition
+    description: "Condition data filtered to records with a non-null code display"

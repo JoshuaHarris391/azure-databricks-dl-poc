@@ -1,0 +1,6 @@
+
+version: 2
+
+models:
+  - name: clinically_active
+    description: "Active conditions filtered from the silver condition model"
