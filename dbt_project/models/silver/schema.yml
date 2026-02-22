@@ -8,7 +8,7 @@ models:
       - name: id
         description: "The primary key for this table"
 
-  - name: silver_hashed_phi
+  - name: hashed_phi
     description: "Patient data with SHA-256 hashed PHI fields (family name and given names)"
     columns:
       - name: id
