@@ -58,6 +58,7 @@ def _get_storage_account_name() -> str:
     """
     if _running_on_databricks():
         dbutils = _get_dbutils()
+        dbutils.widgets.text("storage_account_name", "")
         return dbutils.widgets.get("storage_account_name")
     return os.environ["STORAGE_ACCOUNT_NAME"]
 
