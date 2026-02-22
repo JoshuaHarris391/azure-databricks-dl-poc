@@ -12,6 +12,7 @@ Job Parameters:
     page_size: Number of resources to fetch per API call (default: 100)
 """
 
+import argparse
 import logging
 import sys
 import uuid
@@ -327,66 +328,27 @@ def write_to_delta(
 
 def get_job_parameters() -> dict:
     """
-    Get job parameters from Databricks widgets.
-    
+    Parse job parameters from sys.argv.
+
+    For Databricks Python script tasks, configure job parameters as a
+    JSON array: ["--page_size", "2000"].
+
     Returns a dict with validated parameters.
     """
-    try:
-        from pyspark.dbutils import DBUtils
-        spark = SparkSession.builder.getOrCreate()
-        dbutils = DBUtils(spark)
-        
-        # Try to get the job parameter directly first.
-        # When run as a job, parameters are available via widgets.get()
-        # without needing to create the widget first.
-        try:
-            page_size_str = dbutils.widgets.get("page_size")
-            logger.info(
-                "Got page_size from widget: '%s'",
-                page_size_str,
-            )
-        except Exception as widget_err:
-            logger.info(
-                "Widget 'page_size' not found (%s), "
-                "creating with default %d",
-                widget_err, DEFAULT_PAGE_SIZE,
-            )
-            # Widget doesn't exist yet (e.g. interactive notebook run)
-            dbutils.widgets.text(
-                "page_size", str(DEFAULT_PAGE_SIZE)
-            )
-            page_size_str = dbutils.widgets.get("page_size")
-            logger.info(
-                "Got page_size after creating widget: '%s'",
-                page_size_str,
-            )
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--page_size", type=int, default=DEFAULT_PAGE_SIZE,
+    )
+    args, _ = parser.parse_known_args()
 
-        # Also check sys.argv for --page_size passed via job params
-        import sys
-        logger.info("sys.argv: %s", sys.argv)
-
-        try:
-            page_size = int(page_size_str)
-            if page_size < 1:
-                logger.warning(
-                    "Invalid page_size %d, using default %d",
-                    page_size, DEFAULT_PAGE_SIZE,
-                )
-                page_size = DEFAULT_PAGE_SIZE
-        except ValueError:
-            logger.warning(
-                "Could not parse page_size '%s', using default %d",
-                page_size_str, DEFAULT_PAGE_SIZE,
-            )
-            page_size = DEFAULT_PAGE_SIZE
-            
-    except Exception as e:
-        logger.info(
-            "DBUtils not available (%s), using default page_size %d",
-            e, DEFAULT_PAGE_SIZE,
+    page_size = args.page_size
+    if page_size < 1:
+        logger.warning(
+            "Invalid page_size %d, using default %d",
+            page_size, DEFAULT_PAGE_SIZE,
         )
         page_size = DEFAULT_PAGE_SIZE
-    
+
     return {"page_size": page_size}
 
 
