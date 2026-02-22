@@ -35,17 +35,13 @@ resource "databricks_job" "fhir_ingestion" {
         "ResourceClass" = "SingleNode"
         "project"       = var.project_id
       }
+
+      data_security_mode = "SINGLE_USER"
     }
 
     library {
       pypi {
         package = "requests>=2.31.0"
-      }
-    }
-
-    library {
-      pypi {
-        package = "fhir.resources>=8.0.0"
       }
     }
 

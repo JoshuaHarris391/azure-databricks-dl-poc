@@ -3,9 +3,8 @@ Ingest FHIR R4 resources from the public HAPI FHIR server into Delta tables.
 
 This script (Databricks-only):
 1. Queries the HAPI FHIR R4 API for Patient, Condition, and Encounter resources.
-2. Validates and parses each resource using fhir.resources (pydantic).
-3. Flattens the parsed resources into tabular rows.
-4. Appends the rows to Delta tables in healthcare_poc.bronze via Spark.
+2. Extracts key fields from the raw JSON dicts into flat rows.
+3. Appends the rows to Delta tables in healthcare_poc.bronze via Spark.
 
 Each batch is tagged with a unique batch_id (UUID) and ingested_at timestamp.
 """
@@ -16,10 +15,8 @@ import uuid
 from datetime import datetime, timezone
 
 import requests
-from fhir.resources.R4B.condition import Condition
-from fhir.resources.R4B.encounter import Encounter
-from fhir.resources.R4B.patient import Patient
 from pyspark.sql import SparkSession
+from pyspark.sql.types import StringType, StructField, StructType
 
 
 # --- Logging Configuration ---
@@ -39,13 +36,93 @@ CATALOG = "healthcare_poc"
 SCHEMA = "bronze"
 
 
-# --- FHIR model class lookup ---
-FHIR_MODELS = {
-    "Patient": Patient,
-    "Condition": Condition,
-    "Encounter": Encounter,
+def _g(d, *keys):
+    """Safely traverse nested dicts/lists. Returns None on any miss."""
+    current = d
+    for k in keys:
+        if current is None:
+            return None
+        if isinstance(k, int):
+            if isinstance(current, list) and len(current) > k:
+                current = current[k]
+            else:
+                return None
+        elif isinstance(current, dict):
+            current = current.get(k)
+        else:
+            return None
+    return current
+
+
+def _str(val):
+    """Coerce a value to str or None."""
+    return str(val) if val is not None else None
+
+
+# ------------------------------------------------------------------
+# Explicit Spark schemas (all StringType to avoid inference issues)
+# ------------------------------------------------------------------
+
+_META_FIELDS = [
+    StructField("batch_id", StringType(), True),
+    StructField("ingested_at", StringType(), True),
+]
+
+PATIENT_SCHEMA = StructType([
+    StructField("id", StringType(), True),
+    StructField("active", StringType(), True),
+    StructField("gender", StringType(), True),
+    StructField("birth_date", StringType(), True),
+    StructField("deceased", StringType(), True),
+    StructField("family_name", StringType(), True),
+    StructField("given_names", StringType(), True),
+    StructField("telecom_phone", StringType(), True),
+    StructField("telecom_email", StringType(), True),
+    StructField("address_line", StringType(), True),
+    StructField("address_city", StringType(), True),
+    StructField("address_state", StringType(), True),
+    StructField("address_postal_code", StringType(), True),
+    StructField("address_country", StringType(), True),
+    StructField("marital_status_code", StringType(), True),
+] + _META_FIELDS)
+
+CONDITION_SCHEMA = StructType([
+    StructField("id", StringType(), True),
+    StructField("clinical_status", StringType(), True),
+    StructField("verification_status", StringType(), True),
+    StructField("category_code", StringType(), True),
+    StructField("code", StringType(), True),
+    StructField("code_display", StringType(), True),
+    StructField("subject_reference", StringType(), True),
+    StructField("encounter_reference", StringType(), True),
+    StructField("onset_datetime", StringType(), True),
+    StructField("recorded_date", StringType(), True),
+] + _META_FIELDS)
+
+ENCOUNTER_SCHEMA = StructType([
+    StructField("id", StringType(), True),
+    StructField("status", StringType(), True),
+    StructField("class_code", StringType(), True),
+    StructField("type_code", StringType(), True),
+    StructField("type_display", StringType(), True),
+    StructField("subject_reference", StringType(), True),
+    StructField("period_start", StringType(), True),
+    StructField("period_end", StringType(), True),
+    StructField("reason_code", StringType(), True),
+    StructField("reason_display", StringType(), True),
+    StructField("service_provider_reference", StringType(), True),
+] + _META_FIELDS)
+
+SCHEMAS = {
+    "Patient": PATIENT_SCHEMA,
+    "Condition": CONDITION_SCHEMA,
+    "Encounter": ENCOUNTER_SCHEMA,
 }
 
+
+# ------------------------------------------------------------------
+# Fetch
+# ------------------------------------------------------------------
 
 def fetch_fhir_resources(
     resource_type: str, count: int = PAGE_SIZE
@@ -79,124 +156,101 @@ def fetch_fhir_resources(
 
 
 # ------------------------------------------------------------------
-# Parsers: validate with fhir.resources then flatten to dicts
+# Flatten raw dicts (no pydantic — tolerant of messy public data)
 # ------------------------------------------------------------------
 
-def _safe(fn):
-    """Return None instead of raising on missing nested attributes."""
-    try:
-        return fn()
-    except (AttributeError, IndexError, TypeError):
-        return None
-
-
 def _flatten_patient(raw: dict) -> dict:
-    """Parse and flatten a Patient resource."""
-    pat = Patient.model_validate(raw)
-    name = _safe(lambda: pat.name[0])
-    addr = _safe(lambda: pat.address[0])
-    phones = [
-        t.value for t in (pat.telecom or [])
-        if t.system == "phone"
-    ]
-    emails = [
-        t.value for t in (pat.telecom or [])
-        if t.system == "email"
-    ]
+    """Extract key fields from a raw Patient dict."""
+    name = _g(raw, "name", 0) or {}
+    addr = _g(raw, "address", 0) or {}
+    telecoms = raw.get("telecom") or []
+    phones = [t["value"] for t in telecoms
+              if t.get("system") == "phone" and t.get("value")]
+    emails = [t["value"] for t in telecoms
+              if t.get("system") == "email" and t.get("value")]
+    given = name.get("given")
+    line = addr.get("line")
+    deceased = raw.get("deceasedBoolean")
+    if deceased is None:
+        deceased = raw.get("deceasedDateTime")
     return {
-        "id": pat.id,
-        "active": pat.active,
-        "gender": pat.gender,
-        "birth_date": str(pat.birthDate) if pat.birthDate else None,
-        "deceased": (
-            pat.deceasedBoolean
-            if pat.deceasedBoolean is not None
-            else str(pat.deceasedDateTime) if pat.deceasedDateTime else None
-        ),
-        "family_name": _safe(lambda: name.family),
+        "id": _str(raw.get("id")),
+        "active": _str(raw.get("active")),
+        "gender": _str(raw.get("gender")),
+        "birth_date": _str(raw.get("birthDate")),
+        "deceased": _str(deceased),
+        "family_name": _str(name.get("family")),
         "given_names": (
-            ", ".join(name.given)
-            if _safe(lambda: name.given) else None
+            ", ".join(given) if given else None
         ),
         "telecom_phone": phones[0] if phones else None,
         "telecom_email": emails[0] if emails else None,
         "address_line": (
-            ", ".join(addr.line)
-            if _safe(lambda: addr.line) else None
+            ", ".join(line) if line else None
         ),
-        "address_city": _safe(lambda: addr.city),
-        "address_state": _safe(lambda: addr.state),
-        "address_postal_code": _safe(lambda: addr.postalCode),
-        "address_country": _safe(lambda: addr.country),
-        "marital_status_code": _safe(
-            lambda: pat.maritalStatus.coding[0].code
+        "address_city": _str(addr.get("city")),
+        "address_state": _str(addr.get("state")),
+        "address_postal_code": _str(addr.get("postalCode")),
+        "address_country": _str(addr.get("country")),
+        "marital_status_code": _str(
+            _g(raw, "maritalStatus", "coding", 0, "code")
         ),
     }
 
 
 def _flatten_condition(raw: dict) -> dict:
-    """Parse and flatten a Condition resource."""
-    cond = Condition.model_validate(raw)
+    """Extract key fields from a raw Condition dict."""
     return {
-        "id": cond.id,
-        "clinical_status": _safe(
-            lambda: cond.clinicalStatus.coding[0].code
+        "id": _str(raw.get("id")),
+        "clinical_status": _str(
+            _g(raw, "clinicalStatus", "coding", 0, "code")
         ),
-        "verification_status": _safe(
-            lambda: cond.verificationStatus.coding[0].code
+        "verification_status": _str(
+            _g(raw, "verificationStatus", "coding", 0, "code")
         ),
-        "category_code": _safe(
-            lambda: cond.category[0].coding[0].code
+        "category_code": _str(
+            _g(raw, "category", 0, "coding", 0, "code")
         ),
-        "code": _safe(lambda: cond.code.coding[0].code),
-        "code_display": _safe(
-            lambda: cond.code.coding[0].display
+        "code": _str(_g(raw, "code", "coding", 0, "code")),
+        "code_display": _str(
+            _g(raw, "code", "coding", 0, "display")
         ),
-        "subject_reference": _safe(
-            lambda: cond.subject.reference
+        "subject_reference": _str(
+            _g(raw, "subject", "reference")
         ),
-        "encounter_reference": _safe(
-            lambda: cond.encounter.reference
+        "encounter_reference": _str(
+            _g(raw, "encounter", "reference")
         ),
-        "onset_datetime": (
-            str(cond.onsetDateTime) if cond.onsetDateTime else None
-        ),
-        "recorded_date": (
-            str(cond.recordedDate) if cond.recordedDate else None
-        ),
+        "onset_datetime": _str(raw.get("onsetDateTime")),
+        "recorded_date": _str(raw.get("recordedDate")),
     }
 
 
 def _flatten_encounter(raw: dict) -> dict:
-    """Parse and flatten an Encounter resource."""
-    enc = Encounter.model_validate(raw)
+    """Extract key fields from a raw Encounter dict."""
     return {
-        "id": enc.id,
-        "status": enc.status,
-        "class_code": _safe(lambda: enc.class_fhir.code),
-        "type_code": _safe(
-            lambda: enc.type[0].coding[0].code
+        "id": _str(raw.get("id")),
+        "status": _str(raw.get("status")),
+        "class_code": _str(_g(raw, "class", "code")),
+        "type_code": _str(
+            _g(raw, "type", 0, "coding", 0, "code")
         ),
-        "type_display": _safe(
-            lambda: enc.type[0].coding[0].display
+        "type_display": _str(
+            _g(raw, "type", 0, "coding", 0, "display")
         ),
-        "subject_reference": _safe(
-            lambda: enc.subject.reference
+        "subject_reference": _str(
+            _g(raw, "subject", "reference")
         ),
-        "period_start": (
-            str(enc.period.start) if _safe(lambda: enc.period.start) else None
+        "period_start": _str(_g(raw, "period", "start")),
+        "period_end": _str(_g(raw, "period", "end")),
+        "reason_code": _str(
+            _g(raw, "reasonCode", 0, "coding", 0, "code")
         ),
-        "period_end": (
-            str(enc.period.end) if _safe(lambda: enc.period.end) else None
+        "reason_display": _str(
+            _g(raw, "reasonCode", 0, "coding", 0, "display")
         ),
-        "reason_code": _safe(
-            lambda: enc.reasonCode[0].coding[0].code
-        ),
-        "reason_display": _safe(
-            lambda: enc.reasonCode[0].coding[0].display
-        ),
-        "service_provider_reference": _safe(
-            lambda: enc.serviceProvider.reference
+        "service_provider_reference": _str(
+            _g(raw, "serviceProvider", "reference")
         ),
     }
 
@@ -212,7 +266,7 @@ def parse_fhir_resources(
     resource_type: str, raw_dicts: list[dict]
 ) -> list[dict]:
     """
-    Validate each raw FHIR dict with fhir.resources and flatten
+    Extract fields from each raw FHIR dict and flatten
     into a list of simple dicts ready for a Spark DataFrame.
     """
     flatten = FLATTEN_FN[resource_type]
@@ -237,6 +291,7 @@ def write_to_delta(
     spark: SparkSession,
     rows: list[dict],
     table_name: str,
+    resource_type: str,
     batch_id: str,
     ingested_at: str,
 ) -> None:
@@ -244,12 +299,14 @@ def write_to_delta(
     Write parsed rows to a Unity Catalog Delta table in append mode.
 
     Adds batch_id and ingested_at columns for lineage tracking.
+    Uses an explicit schema to avoid Spark inference failures.
     """
     for row in rows:
         row["batch_id"] = batch_id
         row["ingested_at"] = ingested_at
 
-    df = spark.createDataFrame(rows)
+    schema = SCHEMAS[resource_type]
+    df = spark.createDataFrame(rows, schema=schema)
 
     full_table = f"{CATALOG}.{SCHEMA}.{table_name}"
     logger.info(
@@ -294,7 +351,7 @@ def main():
             )
             continue
 
-        # 2. Parse and flatten with fhir.resources
+        # 2. Parse and flatten
         rows = parse_fhir_resources(resource_type, raw_resources)
         if not rows:
             continue
@@ -303,7 +360,8 @@ def main():
         table_name = resource_type.lower()
         try:
             write_to_delta(
-                spark, rows, table_name, batch_id, ingested_at,
+                spark, rows, table_name,
+                resource_type, batch_id, ingested_at,
             )
             total += len(rows)
         except Exception:
