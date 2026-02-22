@@ -13,3 +13,44 @@ resource "databricks_sql_endpoint" "this" {
     }
   }
 }
+
+# --- Databricks Job: FHIR Ingestion ---
+resource "databricks_job" "fhir_ingestion" {
+  name = "${var.project_id}-${var.environment}-fhir-ingest"
+
+  task {
+    task_key = "ingest_fhir"
+
+    new_cluster {
+      num_workers   = 0  # Single-node (driver only) — sufficient for API fetch + upload
+      spark_version = "15.4.x-scala2.12"
+      node_type_id  = "Standard_DS3_v2"
+
+      spark_conf = {
+        "spark.databricks.cluster.profile" = "singleNode"
+        "spark.master"                     = "local[*]"
+      }
+
+      custom_tags = {
+        "ResourceClass" = "SingleNode"
+        "project"       = var.project_id
+      }
+    }
+
+    library {
+      pypi {
+        package = "requests>=2.31.0"
+      }
+    }
+
+    spark_python_task {
+      python_file = "${databricks_repo.this.path}/ingestion/ingest_fhir.py"
+      source      = "WORKSPACE"
+    }
+  }
+
+  parameter {
+    name    = "storage_account_name"
+    default = azurerm_storage_account.datalake.name
+  }
+}

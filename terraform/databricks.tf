@@ -7,3 +7,12 @@ resource "azurerm_databricks_workspace" "this" {
 
   tags = azurerm_resource_group.this.tags
 }
+
+# --- Databricks Repo ---
+# Syncs this Git repository into the Databricks workspace so jobs can reference scripts directly.
+resource "databricks_repo" "this" {
+  url          = "https://github.com/JoshuaHarris391/azure-databricks-dl-poc"
+  provider     = databricks
+  path         = "/Repos/${var.project_id}/azure-databricks-dl-poc"
+  git_provider = "gitHub"
+}
