@@ -61,7 +61,7 @@ Terraform will output a `databricks_workspace_url` — open it and sign in with 
 Set up environment variables for dbt to connect to Databricks:
 
 ```bash
-source setup_dbt_env.sh
+source dbt_project/setup_dbt_env.sh
 ```
 
 This script:
@@ -85,6 +85,12 @@ dbt debug  # test connection
 
 ## Teardown
 
+Unity Catalog schemas and external locations are protected from accidental deletion by default. To destroy all resources, pass `force_destroy_catalog=true`:
+
 ```bash
-cd terraform && terraform destroy
+cd terraform
+terraform apply -var="force_destroy_catalog=true"   # update state with force_destroy flags
+terraform destroy -var="force_destroy_catalog=true"  # destroy all resources
 ```
+
+> **Note:** The Terraform backend resource group (`rg-azuredbpoc-tfstate-dev`) is not managed by `terraform destroy` and will be preserved.
