@@ -8,6 +8,6 @@ azdbpoc_dbt:
       # The HTTP path is the SQL Warehouse endpoint
       http_path: "{{ env_var('DBT_DATABRICKS_HTTP_PATH') }}"
       catalog: healthcare_poc
-      schema: silver
+      schema: default
       # Use a personal access token for auth
       token: "{{ env_var('DBT_DATABRICKS_TOKEN') }}"
