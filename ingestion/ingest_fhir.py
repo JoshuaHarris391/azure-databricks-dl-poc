@@ -11,11 +11,21 @@ AWS analogy: This is like a Glue Python Shell job that calls an external API and
 """
 
 import json
+import logging
 import os
 import sys
 from datetime import datetime, timezone
 
 import requests
+
+
+# --- Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger(__name__)
 
 
 # --- Configuration ---
@@ -64,7 +74,7 @@ def fetch_fhir_resources(resource_type: str, count: int = PAGE_SIZE) -> list[dic
     url = f"{FHIR_BASE_URL}/{resource_type}"
     params = {"_count": count, "_format": "json"}
 
-    print(f"Fetching {count} {resource_type} resources from {url}...")
+    logger.info(f"Fetching up to {count} {resource_type} resources from {url}")
     response = requests.get(url, params=params, timeout=30)
     response.raise_for_status()
 
@@ -72,7 +82,7 @@ def fetch_fhir_resources(resource_type: str, count: int = PAGE_SIZE) -> list[dic
     entries = bundle.get("entry", [])
     resources = [entry["resource"] for entry in entries]
 
-    print(f"  Retrieved {len(resources)} {resource_type} resources.")
+    logger.info(f"Successfully retrieved {len(resources)} {resource_type} resources")
     return resources
 
 
@@ -86,10 +96,11 @@ def write_ndjson(resources: list[dict], filepath: str) -> None:
 
     AWS analogy: This is the same NDJSON format that Athena and Glue expect when reading JSON from S3.
     """
+    logger.debug(f"Writing {len(resources)} records to {filepath}")
     with open(filepath, "w") as f:
         for resource in resources:
             f.write(json.dumps(resource) + "\n")
-    print(f"  Wrote {len(resources)} records to {filepath}")
+    logger.info(f"Wrote {len(resources)} records to local file: {filepath}")
 
 
 def upload_to_adls(local_path: str, remote_dir: str, filename: str, storage_account_name: str) -> None:
@@ -104,13 +115,17 @@ def upload_to_adls(local_path: str, remote_dir: str, filename: str, storage_acco
     """
     abfss_path = f"abfss://{CONTAINER_NAME}@{storage_account_name}.dfs.core.windows.net/{remote_dir}/{filename}"
 
+    logger.info(f"Uploading {local_path} to {abfss_path}")
+
     if _running_on_databricks():
         dbutils = _get_dbutils()
         dbutils.fs.cp(f"file:{local_path}", abfss_path)
+        logger.info(f"Successfully uploaded via dbutils to {abfss_path}")
     else:
         from azure.identity import DefaultAzureCredential
         from azure.storage.filedatalake import DataLakeServiceClient
 
+        logger.debug(f"Authenticating with DefaultAzureCredential for storage account: {storage_account_name}")
         credential = DefaultAzureCredential()
         service_client = DataLakeServiceClient(
             account_url=f"https://{storage_account_name}.dfs.core.windows.net",
@@ -123,19 +138,32 @@ def upload_to_adls(local_path: str, remote_dir: str, filename: str, storage_acco
         with open(local_path, "rb") as f:
             file_client.upload_data(f, overwrite=True)
 
-    print(f"  Uploaded to {abfss_path}")
+        logger.info(f"Successfully uploaded via Azure SDK to {abfss_path}")
 
 
 def main():
+    logger.info("Starting FHIR ingestion pipeline")
+    
     storage_account_name = _get_storage_account_name()
+    logger.info(f"Using storage account: {storage_account_name}")
+    
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    logger.info(f"Ingestion timestamp: {timestamp}")
+
+    total_resources_ingested = 0
 
     for resource_type in RESOURCE_TYPES:
+        logger.info(f"Processing resource type: {resource_type}")
+        
         # 1. Fetch from FHIR API
-        resources = fetch_fhir_resources(resource_type)
+        try:
+            resources = fetch_fhir_resources(resource_type)
+        except requests.RequestException as e:
+            logger.error(f"Failed to fetch {resource_type} resources: {e}")
+            continue
 
         if not resources:
-            print(f"  No {resource_type} resources found, skipping.")
+            logger.warning(f"No {resource_type} resources found, skipping")
             continue
 
         # 2. Write to local NDJSON file
@@ -146,12 +174,19 @@ def main():
         # 3. Upload to ADLS Gen2 Bronze container
         # Directory structure: bronze/{resource_type}/filename.ndjson
         remote_dir = resource_type.lower()
-        upload_to_adls(local_path, remote_dir, local_filename, storage_account_name)
+        try:
+            upload_to_adls(local_path, remote_dir, local_filename, storage_account_name)
+            total_resources_ingested += len(resources)
+        except Exception as e:
+            logger.error(f"Failed to upload {resource_type} to ADLS: {e}")
+            continue
+        finally:
+            # 4. Cleanup local file
+            if os.path.exists(local_path):
+                os.remove(local_path)
+                logger.debug(f"Cleaned up local file: {local_path}")
 
-        # 4. Cleanup local file
-        os.remove(local_path)
-
-    print("\nIngestion complete.")
+    logger.info(f"Ingestion complete. Total resources ingested: {total_resources_ingested}")
 
 
 if __name__ == "__main__":
