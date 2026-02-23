@@ -2,13 +2,15 @@
 # Setup environment variables for dbt to connect to Databricks
 # Run this script with: source setup_dbt_env.sh
 
-set -e
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TERRAFORM_DIR="$SCRIPT_DIR/terraform"
+TERRAFORM_DIR="$SCRIPT_DIR/../terraform"
 
 echo "Fetching Databricks workspace URL from Terraform..."
-export DBT_DATABRICKS_HOST=$(cd "$TERRAFORM_DIR" && terraform output -raw databricks_workspace_url)
+WORKSPACE_URL=$(cd "$TERRAFORM_DIR" && terraform output -raw databricks_workspace_url)
+export DBT_DATABRICKS_HOST=$WORKSPACE_URL
+
+echo "Configuring Databricks CLI profile..."
+databricks configure --host "https://$WORKSPACE_URL" --profile hcpoc
 
 echo "Fetching SQL Warehouse ID from Terraform..."
 WAREHOUSE_ID=$(cd "$TERRAFORM_DIR" && terraform output -raw sql_warehouse_id)

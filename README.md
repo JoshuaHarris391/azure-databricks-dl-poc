@@ -10,6 +10,10 @@ Publicly available HL7 FHIR data is ingested using a Databricks Spark job from t
 
 dbt is connected to Databricks SQL Warehouse compute using the `dbt-databricks` adapter. Transformations from bronze to silver and gold layers are performed using dbt.
 
+## Video Overview
+
+- [Youtube Overview](https://youtu.be/4vAExAYw4uM)
+
 ## Prerequisites
 
 - Python 3.10+
